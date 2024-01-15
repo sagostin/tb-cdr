@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"github.com/fsnotify/fsnotify"
 	_ "github.com/go-sql-driver/mysql"
+	log "github.com/sirupsen/logrus"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -42,21 +42,27 @@ func main() {
 	// Set up a new file watcher
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Fatal(err)
+		log.Error(err)
 	}
 	defer watcher.Close()
 
 	// Establish a connection to the SQL database
 	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", sqlUser, sqlPassword, sqlHost, sqlPort, sqlDatabase))
 	if err != nil {
-		log.Fatal(err)
+		log.Error(err)
 	}
-	defer db.Close()
+	defer func(db *sql.DB) {
+		err := db.Close()
+		if err != nil {
+			log.Error(
+				err)
+		}
+	}(db)
 
 	// Start watching the main directory for changes
 	err = watcher.Add(mainDir)
 	if err != nil {
-		log.Fatal(err)
+		log.Error(err)
 	}
 
 	// Listen for events and errors
@@ -124,40 +130,34 @@ func processFile(filePath string, db *sql.DB) {
 		}
 
 		// Insert CDR records into the database
-		for _, cdr := range cdrs {
-			// Use a prepared SQL statement for database insertion
-			// Prepare the SQL statement for inserting CDR records
-			stmt, err := db.Prepare(`
+		// Use a prepared SQL statement for database insertion
+		// Prepare the SQL statement for inserting CDR records
+		stmt, err := db.Prepare(`
     INSERT INTO tb_cdr 
     (Timestamp, Type, SessionID, LegID, StartTime, ConnectedTime, EndTime, FreedTime, Duration, 
     TerminationCause, TerminationSource, Calling, Called, NAP, Direction, Media, RtpRx, RtpTx, 
     T38Rx, T38Tx, ErrorFromNetwork, ErrorToNetwork, MOS, NetworkQuality) 
     VALUES 
     (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-			if err != nil {
-				log.Fatal("Error preparing insert statement:", err)
-			}
+		if err != nil {
+			log.Error("Error preparing insert statement:", err)
+		}
 
-			// Iterate over the CDR records and insert them into the database
-			for _, cdr := range cdrs {
-				_, err = stmt.Exec(
-					cdr.Timestamp, cdr.Type, cdr.SessionID, cdr.LegID, cdr.StartTime, cdr.ConnectedTime, cdr.EndTime,
-					cdr.FreedTime, cdr.Duration, cdr.TerminationCause, cdr.TerminationSource, cdr.Calling, cdr.Called,
-					cdr.NAP, cdr.Direction, cdr.Media, cdr.RtpRx, cdr.RtpTx, cdr.T38Rx, cdr.T38Tx, cdr.ErrorFromNetwork,
-					cdr.ErrorToNetwork, cdr.MOS, cdr.NetworkQuality,
-				)
-				if err != nil {
-					log.Println("Error inserting CDR record:", err)
-				}
-			}
-
+		// Iterate over the CDR records and insert them into the database
+		for _, cdr := range cdrs {
 			_, err = stmt.Exec(
-				// List all the fields from the cdr struct
-				cdr.Timestamp, cdr.Type, /* ... and other CDR fields ... */
+				cdr.Timestamp, cdr.Type, cdr.SessionID, cdr.LegID, cdr.StartTime, cdr.ConnectedTime, cdr.EndTime,
+				cdr.FreedTime, cdr.Duration, cdr.TerminationCause, cdr.TerminationSource, cdr.Calling, cdr.Called,
+				cdr.NAP, cdr.Direction, cdr.Media, cdr.RtpRx, cdr.RtpTx, cdr.T38Rx, cdr.T38Tx, cdr.ErrorFromNetwork,
+				cdr.ErrorToNetwork, cdr.MOS, cdr.NetworkQuality,
 			)
 			if err != nil {
-				log.Println("Error inserting CDR record into database:", err)
+				log.Println("Error inserting CDR record:", err)
 			}
+		}
+
+		if err != nil {
+			log.Println("Error inserting CDR record into database:", err)
 		}
 	}
 }
