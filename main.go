@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"compress/gzip"
+	"database/sql"
 	"flag"
 	"fmt"
 	"github.com/fsnotify/fsnotify"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 var (
@@ -25,6 +27,7 @@ var (
 )
 
 func init() {
+	// Initialize command-line flags
 	flag.StringVar(&mainDir, "mainDir", "./", "Main working directory")
 	flag.StringVar(&tempDir, "tempDir", "/tmp", "Temporary directory for processing files")
 	flag.StringVar(&sqlUser, "sqlUser", "root", "SQL database username")
@@ -36,17 +39,27 @@ func init() {
 }
 
 func main() {
+	// Set up a new file watcher
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer func(watcher *fsnotify.Watcher) {
-		err := watcher.Close()
-		if err != nil {
+	defer watcher.Close()
 
-		}
-	}(watcher)
+	// Establish a connection to the SQL database
+	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", sqlUser, sqlPassword, sqlHost, sqlPort, sqlDatabase))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
 
+	// Start watching the main directory for changes
+	err = watcher.Add(mainDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Listen for events and errors
 	done := make(chan bool)
 	go func() {
 		for {
@@ -57,7 +70,7 @@ func main() {
 				}
 				if event.Op&fsnotify.Create == fsnotify.Create {
 					log.Println("New file detected:", event.Name)
-					go processFile(event.Name) // process in a new goroutine
+					go processFile(event.Name, db) // Process in a new goroutine
 				}
 
 			case err, ok := <-watcher.Errors:
@@ -68,14 +81,12 @@ func main() {
 			}
 		}
 	}()
-	err = watcher.Add(mainDir)
-	if err != nil {
-		log.Fatal(err)
-	}
+
 	<-done
 }
 
-func processFile(filePath string) {
+func processFile(filePath string, db *sql.DB) {
+	// Get the file name and construct the temp file path
 	fileName := filepath.Base(filePath)
 	tempFilePath := filepath.Join(tempDir, fileName)
 
@@ -86,31 +97,75 @@ func processFile(filePath string) {
 		return
 	}
 
-	// Check if file is a .gz archive and extract
-	if filepath.Ext(fileName) == ".gz" {
+	// If the file is a .gz file, extract it
+	if filepath.Ext(tempFilePath) == ".gz" {
 		err = extractGzip(tempFilePath, tempDir)
 		if err != nil {
 			log.Println("Error extracting .gz file:", err)
 			return
 		}
-		tempFilePath = tempFilePath[:len(tempFilePath)-len(".gz")]
+		// Update the tempFilePath to the extracted file
+		tempFilePath = tempFilePath[:len(tempFilePath)-len(filepath.Ext(tempFilePath))]
 	}
 
-	// Process the file
-	lines, err := processLines(tempFilePath)
-	if err != nil {
-		log.Println("Error processing file:", err)
-	}
+	// Process the file if it's a .log file
+	if filepath.Ext(tempFilePath) == ".log" {
+		cdrs, err := processLines(tempFilePath)
+		if err != nil {
+			log.Println("Error processing log file:", err)
+			return
+		}
 
-	// Example: Print each line or process further
-	for _, line := range lines {
-		fmt.Println(line)
+		// Remove the processed .log file
+		err = os.Remove(tempFilePath)
+		if err != nil {
+			log.Println("Error removing processed file:", err)
+			// Continue to database insertion even if file removal fails
+		}
+
+		// Insert CDR records into the database
+		for _, cdr := range cdrs {
+			// Use a prepared SQL statement for database insertion
+			// Prepare the SQL statement for inserting CDR records
+			stmt, err := db.Prepare(`
+    INSERT INTO tb_cdr 
+    (Timestamp, Type, SessionID, LegID, StartTime, ConnectedTime, EndTime, FreedTime, Duration, 
+    TerminationCause, TerminationSource, Calling, Called, NAP, Direction, Media, RtpRx, RtpTx, 
+    T38Rx, T38Tx, ErrorFromNetwork, ErrorToNetwork, MOS, NetworkQuality) 
+    VALUES 
+    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+			if err != nil {
+				log.Fatal("Error preparing insert statement:", err)
+			}
+
+			// Iterate over the CDR records and insert them into the database
+			for _, cdr := range cdrs {
+				_, err = stmt.Exec(
+					cdr.Timestamp, cdr.Type, cdr.SessionID, cdr.LegID, cdr.StartTime, cdr.ConnectedTime, cdr.EndTime,
+					cdr.FreedTime, cdr.Duration, cdr.TerminationCause, cdr.TerminationSource, cdr.Calling, cdr.Called,
+					cdr.NAP, cdr.Direction, cdr.Media, cdr.RtpRx, cdr.RtpTx, cdr.T38Rx, cdr.T38Tx, cdr.ErrorFromNetwork,
+					cdr.ErrorToNetwork, cdr.MOS, cdr.NetworkQuality,
+				)
+				if err != nil {
+					log.Println("Error inserting CDR record:", err)
+				}
+			}
+
+			_, err = stmt.Exec(
+				// List all the fields from the cdr struct
+				cdr.Timestamp, cdr.Type, /* ... and other CDR fields ... */
+			)
+			if err != nil {
+				log.Println("Error inserting CDR record into database:", err)
+			}
+		}
 	}
 }
+
 func extractGzip(src, destDir string) error {
 	gzFile, err := os.Open(src)
 	if err != nil {
-		return err
+		return fmt.Errorf("error opening .gz file: %v", err)
 	}
 	defer func(gzFile *os.File) {
 		err := gzFile.Close()
@@ -121,7 +176,7 @@ func extractGzip(src, destDir string) error {
 
 	gzReader, err := gzip.NewReader(gzFile)
 	if err != nil {
-		return err
+		return fmt.Errorf("error creating gzip reader: %v", err)
 	}
 	defer func(gzReader *gzip.Reader) {
 		err := gzReader.Close()
@@ -130,10 +185,11 @@ func extractGzip(src, destDir string) error {
 		}
 	}(gzReader)
 
-	extractedFilePath := src[:len(src)-len(".gz")]
+	// The name of the extracted file will be the same as the .gz file but without the .gz extension
+	extractedFilePath := filepath.Join(destDir, strings.TrimSuffix(filepath.Base(src), ".gz"))
 	extractedFile, err := os.Create(extractedFilePath)
 	if err != nil {
-		return err
+		return fmt.Errorf("error creating extracted file: %v", err)
 	}
 	defer func(extractedFile *os.File) {
 		err := extractedFile.Close()
@@ -143,8 +199,14 @@ func extractGzip(src, destDir string) error {
 	}(extractedFile)
 
 	_, err = io.Copy(extractedFile, gzReader)
-	return err
+	if err != nil {
+		return fmt.Errorf("error writing extracted data: %v", err)
+	}
+
+	return nil
 }
+
+// CDR is a struct that contains the information from a CDR record
 
 var regexLine = `(?P<Timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+\+0000),(?P<Type>.*?),SessionId='(?P<SessionId>.*?)',LegId='(?P<LegId>.*?)',StartTime='(?P<StartTime>\d+)',ConnectedTime='(?P<ConnectedTime>\d+)',EndTime='(?P<EndTime>\d+)',FreedTime='(?P<FreedTime>\d+)',Duration='(?P<Duration>\d+)',TerminationCause='(?P<TerminationCause>.*?)',TerminationSource='(?P<TerminationSource>.*?)',Calling='(?P<Calling>\+?\d+)',Called='(?P<Called>\+?\d+|)',NAP='(?P<NAP>.*?)',Direction='(?P<Direction>.*?)',Media='(?P<Media>.*?)',Rtp:Rx='(?P<RtpRx>.*?)',Rtp:Tx='(?P<RtpTx>.*?)',T38:Rx='(?P<T38Rx>.*?)',T38:Tx='(?P<T38Tx>.*?)',Error:FromNetwork='(?P<ErrorFromNetwork>.*?)',Error:ToNetwork='(?P<ErrorToNetwork>.*?)',MOS='(?P<MOS>.*?)','-',NetworkQuality='(?P<NetworkQuality>.*?)','-'`
 
