@@ -246,7 +246,7 @@ func extractGzip(src, destDir string) error {
 var (
 	regexStart  = `(?P<Timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+-\d+),BEG,SessionId='(?P<SessionId>[^']+)',LegId='(?P<LegId>[^']+)',StartTime='(?P<StartTime>[^']+)',ConnectedTime='(?P<ConnectedTime>[^']+)',Calling='(?P<Calling>[^']+)',Called='(?P<Called>[^']+)',NAP='(?P<NAP>[^']+)',Protocol='(?P<Protocol>[^']+)',Direction='(?P<Direction>[^']+)'`
 	regexUpdate = `^(?P<Timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+-\d+),UPD,SessionId='(?P<SessionId>[^']+)',LegId='(?P<LegId>[^']+)',Rtp:Rx='(?P<RtpRx>[^']+)',Rtp:Tx='(?P<RtpTx>[^']+)',T38:Rx='(?P<T38Rx>[^']+)',T38:Tx='(?P<T38Tx>[^']+)',Error:FromNetwork='(?P<ErrorFromNetwork>[^']+)',Error:ToNetwork='(?P<ErrorToNetwork>[^']+)'`
-	regexEnd    = `(?P<Timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+-\d{4}),END,SessionId='(?P<SessionId>[^']+)',LegId='(?P<LegId>[^']+)',StartTime='(?P<StartTime>[^']+)',ConnectedTime='(?P<ConnectedTime>[^']+)',EndTime='(?P<EndTime>[^']+)',FreedTime='(?P<FreedTime>[^']+)',Duration='(?P<Duration>[^']+)',TerminationCause='(?P<TerminationCause>[^']+)',TerminationSource='(?P<TerminationSource>[^']+)',Calling='(?P<Calling>\+?\d+)',Called='(?P<Called>\+?\d+|)',NAP='(?P<NAP>.*?)',Direction='(?P<Direction>.*?)',Media='(?P<Media>.*?)',Rtp:Rx='(?P<RtpRx>.*?)',Rtp:Tx='(?P<RtpTx>.*?)',T38:Rx='(?P<T38Rx>.*?)',T38:Tx='(?P<T38Tx>.*?)',Error:FromNetwork='(?P<ErrorFromNetwork>.*?)',Error:ToNetwork='(?P<ErrorToNetwork>.*?)',MOS='(?P<MOS1>.*?)','(?P<MOS2>.*?)',NetworkQuality='(?P<NetworkQuality1>.*?)','(?P<NetworkQuality2>.*?)'`
+	regexEnd    = `(?P<Timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+-\d{4}),END,SessionId='(?P<SessionId>[^']+)',LegId='(?P<LegId>[^']+)',StartTime='(?P<StartTime>[^']+)',ConnectedTime='(?P<ConnectedTime>[^']+)',EndTime='(?P<EndTime>[^']+)',FreedTime='(?P<FreedTime>[^']+)',Duration='(?P<Duration>[^']+)',TerminationCause='(?P<TerminationCause>[^']+)',TerminationSource='(?P<TerminationSource>[^']+)',Calling='(?P<Calling>[^']+)',Called='(?P<Called>[^']+)',NAP='(?P<NAP>.*?)',Direction='(?P<Direction>.*?)',Media='(?P<Media>.*?)',Rtp:Rx='(?P<RtpRx>.*?)',Rtp:Tx='(?P<RtpTx>.*?)',T38:Rx='(?P<T38Rx>.*?)',T38:Tx='(?P<T38Tx>.*?)',Error:FromNetwork='(?P<ErrorFromNetwork>.*?)',Error:ToNetwork='(?P<ErrorToNetwork>.*?)',MOS=(?P<MOS>.*?),NetworkQuality=(?P<NetworkQuality>.*)`
 )
 
 func processLines(filePath string) ([]CDR, error) {
@@ -335,8 +335,8 @@ func processLines(filePath string) ([]CDR, error) {
 					T38Tx:             match[r.SubexpIndex("T38Tx")],
 					ErrorFromNetwork:  match[r.SubexpIndex("ErrorFromNetwork")],
 					ErrorToNetwork:    match[r.SubexpIndex("ErrorToNetwork")],
-					MOS:               match[r.SubexpIndex("MOS1")],            // Assuming MOS1 and MOS2 need to be combined
-					NetworkQuality:    match[r.SubexpIndex("NetworkQuality1")], // Assuming NetworkQuality1 and NetworkQuality2 need to be combined
+					MOS:               match[r.SubexpIndex("MOS")],            // Assuming MOS1 and MOS2 need to be combined
+					NetworkQuality:    match[r.SubexpIndex("NetworkQuality")], // Assuming NetworkQuality1 and NetworkQuality2 need to be combined
 				}
 			}
 		} else {
