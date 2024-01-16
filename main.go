@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var (
@@ -192,6 +193,7 @@ func processExistingFiles(directory string, db *sql.DB) {
 			}
 			filePath = tempFilePath
 		}
+		time.Sleep(250 * time.Millisecond) // Sleep for 250ms to allow the file to be moved
 
 		go processFile(filePath, db)
 	}
