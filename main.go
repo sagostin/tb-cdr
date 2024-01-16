@@ -65,22 +65,8 @@ func main() {
 		}
 	}(db)
 
-	// Process existing files in the main directory
-	files, err := ioutil.ReadDir(mainDir)
-	if err != nil {
-		log.Error("Error reading main directory:", err)
-		return
-	}
-	for _, file := range files {
-		// Move the file to the temp directory
-		err := os.Rename(filepath.Join(mainDir, file.Name()), filepath.Join(tempDir, file.Name()))
-		if err != nil {
-			log.Println("Error moving file:", err)
-			return
-		}
-
-		go processFile(filepath.Join(mainDir, file.Name()), db)
-	}
+	processExistingFiles(mainDir, db)
+	processExistingFiles(tempDir, db)
 
 	// Start watching the main directory for changes
 	err = watcher.Add(mainDir)
@@ -105,7 +91,6 @@ func main() {
 					err := os.Rename(srcFilePath, destFilePath)
 					if err != nil {
 						log.Println("Error moving file:", err)
-						continue // Continue to next event
 					}
 
 					log.Println("New file detected:", event.Name)
@@ -185,6 +170,30 @@ func processFile(filePath string, db *sql.DB) {
 		if err != nil {
 			log.Println("Error inserting CDR record into database:", err)
 		}
+	}
+}
+
+func processExistingFiles(directory string, db *sql.DB) {
+	files, err := ioutil.ReadDir(directory)
+	if err != nil {
+		log.Error("Error reading directory:", directory, err)
+		return
+	}
+	for _, file := range files {
+		filePath := filepath.Join(directory, file.Name())
+
+		// Move file to tempDir if it's in mainDir
+		if directory == mainDir {
+			tempFilePath := filepath.Join(tempDir, file.Name())
+			err := os.Rename(filePath, tempFilePath)
+			if err != nil {
+				log.Println("Error moving file:", err)
+				continue // Skip to the next file
+			}
+			filePath = tempFilePath
+		}
+
+		go processFile(filePath, db)
 	}
 }
 
