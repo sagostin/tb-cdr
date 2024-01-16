@@ -24,5 +24,6 @@ type CDR struct {
 	ErrorFromNetwork  string `json:"error_from_network,omitempty"`
 	ErrorToNetwork    string `json:"error_to_network,omitempty"`
 	MOS               string `json:"mos,omitempty"`
+	Protocol          string `json:"protocol,omitempty"`
 	NetworkQuality    string `json:"network_quality,omitempty"`
 }

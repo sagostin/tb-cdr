@@ -243,7 +243,11 @@ func extractGzip(src, destDir string) error {
 
 // CDR is a struct that contains the information from a CDR record
 
-var regexLine = `(?P<Timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+\+0000),(?P<Type>.*?),SessionId='(?P<SessionId>.*?)',LegId='(?P<LegId>.*?)',StartTime='(?P<StartTime>\d+)',ConnectedTime='(?P<ConnectedTime>\d+)',EndTime='(?P<EndTime>\d+)',FreedTime='(?P<FreedTime>\d+)',Duration='(?P<Duration>\d+)',TerminationCause='(?P<TerminationCause>.*?)',TerminationSource='(?P<TerminationSource>.*?)',Calling='(?P<Calling>\+?\d+)',Called='(?P<Called>\+?\d+|)',NAP='(?P<NAP>.*?)',Direction='(?P<Direction>.*?)',Media='(?P<Media>.*?)',Rtp:Rx='(?P<RtpRx>.*?)',Rtp:Tx='(?P<RtpTx>.*?)',T38:Rx='(?P<T38Rx>.*?)',T38:Tx='(?P<T38Tx>.*?)',Error:FromNetwork='(?P<ErrorFromNetwork>.*?)',Error:ToNetwork='(?P<ErrorToNetwork>.*?)',MOS='(?P<MOS>.*?)','-',NetworkQuality='(?P<NetworkQuality>.*?)','-'`
+var (
+	regexStart  = `(?P<Timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+-\d+),BEG,SessionId='(?P<SessionId>[^']+)',LegId='(?P<LegId>[^']+)',StartTime='(?P<StartTime>[^']+)',ConnectedTime='(?P<ConnectedTime>[^']+)',Calling='(?P<Calling>[^']+)',Called='(?P<Called>[^']+)',NAP='(?P<NAP>[^']+)',Protocol='(?P<Protocol>[^']+)',Direction='(?P<Direction>[^']+)'`
+	regexUpdate = `^(?P<Timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+-\d+),UPD,SessionId='(?P<SessionId>[^']+)',LegId='(?P<LegId>[^']+)',Rtp:Rx='(?P<RtpRx>[^']+)',Rtp:Tx='(?P<RtpTx>[^']+)',T38:Rx='(?P<T38Rx>[^']+)',T38:Tx='(?P<T38Tx>[^']+)',Error:FromNetwork='(?P<ErrorFromNetwork>[^']+)',Error:ToNetwork='(?P<ErrorToNetwork>[^']+)'`
+	regexEnd    = `(?P<Timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+-\d{4}),END,SessionId='(?P<SessionId>[^']+)',LegId='(?P<LegId>[^']+)',StartTime='(?P<StartTime>[^']+)',ConnectedTime='(?P<ConnectedTime>[^']+)',EndTime='(?P<EndTime>[^']+)',FreedTime='(?P<FreedTime>[^']+)',Duration='(?P<Duration>[^']+)',TerminationCause='(?P<TerminationCause>[^']+)',TerminationSource='(?P<TerminationSource>[^']+)',Calling='(?P<Calling>\+?\d+)',Called='(?P<Called>\+?\d+|)',NAP='(?P<NAP>.*?)',Direction='(?P<Direction>.*?)',Media='(?P<Media>.*?)',Rtp:Rx='(?P<RtpRx>.*?)',Rtp:Tx='(?P<RtpTx>.*?)',T38:Rx='(?P<T38Rx>.*?)',T38:Tx='(?P<T38Tx>.*?)',Error:FromNetwork='(?P<ErrorFromNetwork>.*?)',Error:ToNetwork='(?P<ErrorToNetwork>.*?)',MOS='(?P<MOS1>.*?)','(?P<MOS2>.*?)',NetworkQuality='(?P<NetworkQuality1>.*?)','(?P<NetworkQuality2>.*?)'`
+)
 
 func processLines(filePath string) ([]CDR, error) {
 	var cdrs []CDR
@@ -263,49 +267,88 @@ func processLines(filePath string) ([]CDR, error) {
 	// Create a scanner to read the file
 	scanner := bufio.NewScanner(file)
 
-	// Example regex pattern
-	r := regexp.MustCompile(regexLine)
-
 	// Read file line by line
 	for scanner.Scan() {
 		line := scanner.Text()
+		var cdr CDR
+		var match []string
 
-		// Process each line
-		match := r.FindStringSubmatch(line)
-		if match == nil {
-			log.Printf("Line did not match. Skipping line: %s\n", line)
+		if strings.Contains(line, "BEG") {
+			r := regexp.MustCompile(regexStart)
+			match = r.FindStringSubmatch(line)
+			if match != nil {
+				cdr = CDR{
+					Timestamp:     match[r.SubexpIndex("Timestamp")],
+					Type:          "BEG",
+					SessionID:     match[r.SubexpIndex("SessionId")],
+					LegID:         match[r.SubexpIndex("LegId")],
+					StartTime:     match[r.SubexpIndex("StartTime")],
+					ConnectedTime: match[r.SubexpIndex("ConnectedTime")],
+					Calling:       match[r.SubexpIndex("Calling")],
+					Called:        match[r.SubexpIndex("Called")],
+					NAP:           match[r.SubexpIndex("NAP")],
+					Protocol:      match[r.SubexpIndex("Protocol")],
+					Direction:     match[r.SubexpIndex("Direction")],
+				}
+			}
+		} else if strings.Contains(line, "UPD") {
+			r := regexp.MustCompile(regexUpdate)
+			match = r.FindStringSubmatch(line)
+			if match != nil {
+				cdr = CDR{
+					Timestamp:        match[r.SubexpIndex("Timestamp")],
+					Type:             "UPD",
+					SessionID:        match[r.SubexpIndex("SessionId")],
+					LegID:            match[r.SubexpIndex("LegId")],
+					RtpRx:            match[r.SubexpIndex("RtpRx")],
+					RtpTx:            match[r.SubexpIndex("RtpTx")],
+					T38Rx:            match[r.SubexpIndex("T38Rx")],
+					T38Tx:            match[r.SubexpIndex("T38Tx")],
+					ErrorFromNetwork: match[r.SubexpIndex("ErrorFromNetwork")],
+					ErrorToNetwork:   match[r.SubexpIndex("ErrorToNetwork")],
+				}
+			}
+		} else if strings.Contains(line, "END") {
+			r := regexp.MustCompile(regexEnd)
+			match = r.FindStringSubmatch(line)
+			if match != nil {
+				cdr = CDR{
+					Timestamp:         match[r.SubexpIndex("Timestamp")],
+					Type:              "END",
+					SessionID:         match[r.SubexpIndex("SessionId")],
+					LegID:             match[r.SubexpIndex("LegId")],
+					StartTime:         match[r.SubexpIndex("StartTime")],
+					ConnectedTime:     match[r.SubexpIndex("ConnectedTime")],
+					EndTime:           match[r.SubexpIndex("EndTime")],
+					FreedTime:         match[r.SubexpIndex("FreedTime")],
+					Duration:          match[r.SubexpIndex("Duration")],
+					TerminationCause:  match[r.SubexpIndex("TerminationCause")],
+					TerminationSource: match[r.SubexpIndex("TerminationSource")],
+					Calling:           match[r.SubexpIndex("Calling")],
+					Called:            match[r.SubexpIndex("Called")],
+					NAP:               match[r.SubexpIndex("NAP")],
+					Direction:         match[r.SubexpIndex("Direction")],
+					Media:             match[r.SubexpIndex("Media")],
+					RtpRx:             match[r.SubexpIndex("RtpRx")],
+					RtpTx:             match[r.SubexpIndex("RtpTx")],
+					T38Rx:             match[r.SubexpIndex("T38Rx")],
+					T38Tx:             match[r.SubexpIndex("T38Tx")],
+					ErrorFromNetwork:  match[r.SubexpIndex("ErrorFromNetwork")],
+					ErrorToNetwork:    match[r.SubexpIndex("ErrorToNetwork")],
+					MOS:               match[r.SubexpIndex("MOS1")],            // Assuming MOS1 and MOS2 need to be combined
+					NetworkQuality:    match[r.SubexpIndex("NetworkQuality1")], // Assuming NetworkQuality1 and NetworkQuality2 need to be combined
+				}
+			}
+		} else {
+			log.Printf("Unknown CDR type. Skipping line: %s\n", line)
 			continue
 		}
 
-		// Construct CDR object from regex groups
-		cdr := CDR{
-			Timestamp:         match[r.SubexpIndex("Timestamp")],
-			Type:              match[r.SubexpIndex("Type")],
-			SessionID:         match[r.SubexpIndex("SessionId")],
-			LegID:             match[r.SubexpIndex("LegId")],
-			StartTime:         match[r.SubexpIndex("StartTime")],
-			ConnectedTime:     match[r.SubexpIndex("ConnectedTime")],
-			EndTime:           match[r.SubexpIndex("EndTime")],
-			FreedTime:         match[r.SubexpIndex("FreedTime")],
-			Duration:          match[r.SubexpIndex("Duration")],
-			TerminationCause:  match[r.SubexpIndex("TerminationCause")],
-			TerminationSource: match[r.SubexpIndex("TerminationSource")],
-			Calling:           match[r.SubexpIndex("Calling")],
-			Called:            match[r.SubexpIndex("Called")],
-			NAP:               match[r.SubexpIndex("NAP")],
-			Direction:         match[r.SubexpIndex("Direction")],
-			Media:             match[r.SubexpIndex("Media")],
-			RtpRx:             match[r.SubexpIndex("RtpRx")],
-			RtpTx:             match[r.SubexpIndex("RtpTx")],
-			T38Rx:             match[r.SubexpIndex("T38Rx")],
-			T38Tx:             match[r.SubexpIndex("T38Tx")],
-			ErrorFromNetwork:  match[r.SubexpIndex("ErrorFromNetwork")],
-			ErrorToNetwork:    match[r.SubexpIndex("ErrorToNetwork")],
-			MOS:               match[r.SubexpIndex("MOS")],
-			NetworkQuality:    match[r.SubexpIndex("NetworkQuality")],
+		if match != nil {
+			cdrs = append(cdrs, cdr)
+		} else {
+			log.Printf("Line did not match. Skipping line: %s\n", line)
 		}
-
-		cdrs = append(cdrs, cdr)
 	}
 
 	// Check for any errors encountered while reading the file
