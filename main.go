@@ -10,6 +10,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	log "github.com/sirupsen/logrus"
 	"io"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -28,8 +29,8 @@ var (
 
 func init() {
 	// Initialize command-line flags
-	flag.StringVar(&mainDir, "mainDir", "./", "Main working directory")
-	flag.StringVar(&tempDir, "tempDir", "/tmp", "Temporary directory for processing files")
+	flag.StringVar(&mainDir, "mainDir", "./new", "Main working directory")
+	flag.StringVar(&tempDir, "tempDir", "./tmp", "Temporary directory for processing files")
 	flag.StringVar(&sqlUser, "sqlUser", "root", "SQL database username")
 	flag.StringVar(&sqlPassword, "sqlPassword", "", "SQL database password")
 	flag.StringVar(&sqlHost, "sqlHost", "localhost", "SQL database host")
@@ -44,7 +45,12 @@ func main() {
 	if err != nil {
 		log.Error(err)
 	}
-	defer watcher.Close()
+	defer func(watcher *fsnotify.Watcher) {
+		err := watcher.Close()
+		if err != nil {
+			log.Error(err)
+		}
+	}(watcher)
 
 	// Establish a connection to the SQL database
 	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", sqlUser, sqlPassword, sqlHost, sqlPort, sqlDatabase))
@@ -58,6 +64,16 @@ func main() {
 				err)
 		}
 	}(db)
+
+	// Process existing files in the main directory
+	files, err := ioutil.ReadDir(mainDir)
+	if err != nil {
+		log.Error("Error reading main directory:", err)
+		return
+	}
+	for _, file := range files {
+		go processFile(filepath.Join(mainDir, file.Name()), db)
+	}
 
 	// Start watching the main directory for changes
 	err = watcher.Add(mainDir)
@@ -221,7 +237,7 @@ func processLines(filePath string) ([]CDR, error) {
 	defer func(file *os.File) {
 		err := file.Close()
 		if err != nil {
-
+			log.Error(err)
 		}
 	}(file)
 
