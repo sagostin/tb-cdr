@@ -72,6 +72,13 @@ func main() {
 		return
 	}
 	for _, file := range files {
+		// Move the file to the temp directory
+		err := os.Rename(filepath.Join(mainDir, file.Name()), filepath.Join(tempDir, file.Name()))
+		if err != nil {
+			log.Println("Error moving file:", err)
+			return
+		}
+
 		go processFile(filepath.Join(mainDir, file.Name()), db)
 	}
 
@@ -112,16 +119,9 @@ func processFile(filePath string, db *sql.DB) {
 	fileName := filepath.Base(filePath)
 	tempFilePath := filepath.Join(tempDir, fileName)
 
-	// Move the file to the temp directory
-	err := os.Rename(filePath, tempFilePath)
-	if err != nil {
-		log.Println("Error moving file:", err)
-		return
-	}
-
 	// If the file is a .gz file, extract it
 	if filepath.Ext(tempFilePath) == ".gz" {
-		err = extractGzip(tempFilePath, tempDir)
+		err := extractGzip(tempFilePath, tempDir)
 		if err != nil {
 			log.Println("Error extracting .gz file:", err)
 			return
