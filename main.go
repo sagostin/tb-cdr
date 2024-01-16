@@ -10,12 +10,11 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	log "github.com/sirupsen/logrus"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
+	"sync"
 )
 
 var (
@@ -26,6 +25,7 @@ var (
 	sqlHost     string
 	sqlPort     string
 	sqlDatabase string
+	sqlDB       *sql.DB
 )
 
 func init() {
@@ -40,11 +40,34 @@ func init() {
 	flag.Parse()
 }
 
+func initDB() (*sql.DB, error) {
+	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", sqlUser, sqlPassword, sqlHost, sqlPort, sqlDatabase))
+	if err != nil {
+		return nil, err
+	}
+	// Set up connection pooling here if needed
+	return db, nil
+}
+
 func main() {
-	// Set up a new file watcher
+	// Initialize the database connection
+	db, err := initDB()
+	if err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer func(db *sql.DB) {
+		err := db.Close()
+		if err != nil {
+			log.Error(err)
+		}
+	}(db)
+
+	sqlDB = db
+
+	// Initialize the file watcher
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Error(err)
+		log.Fatalf("Failed to initialize file watcher: %v", err)
 	}
 	defer func(watcher *fsnotify.Watcher) {
 		err := watcher.Close()
@@ -53,82 +76,92 @@ func main() {
 		}
 	}(watcher)
 
-	// Establish a connection to the SQL database
-	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", sqlUser, sqlPassword, sqlHost, sqlPort, sqlDatabase))
-	if err != nil {
-		log.Error(err)
-	}
-	defer func(db *sql.DB) {
-		err := db.Close()
-		if err != nil {
-			log.Error(
-				err)
-		}
-	}(db)
+	// Start the processing routines
+	go watchDirectory(mainDir, watcher, db, true)  // Watch for .gz files in mainDir
+	go watchDirectory(tempDir, watcher, db, false) // Watch for .log files in tempDir
 
-	processExistingFiles(mainDir, db)
-	processExistingFiles(tempDir, db)
-
-	// Start watching the main directory for changes
-	err = watcher.Add(mainDir)
-	if err != nil {
-		log.Error(err)
-	}
-
-	// Listen for events and errors
-	done := make(chan bool)
-	go func() {
-		for {
-			select {
-			case event, ok := <-watcher.Events:
-				if !ok {
-					return
-				}
-				if event.Op&fsnotify.Create == fsnotify.Create {
-					srcFilePath := event.Name
-					destFilePath := filepath.Join(tempDir, filepath.Base(event.Name))
-
-					// Move the file to the temp directory
-					err := os.Rename(srcFilePath, destFilePath)
-					if err != nil {
-						log.Println("Error moving file:", err)
-					}
-
-					log.Println("New file detected:", event.Name)
-					go processFile(event.Name, db) // Process in a new goroutine
-				}
-
-			case err, ok := <-watcher.Errors:
-				if !ok {
-					return
-				}
-				log.Println("Error:", err)
-			}
-		}
-	}()
-
-	<-done
+	// Wait for termination signal
+	select {}
 }
 
-func processFile(filePath string, db *sql.DB) {
-	// Get the file name and construct the temp file path
-	fileName := filepath.Base(filePath)
-	tempFilePath := filepath.Join(tempDir, fileName)
-
-	// If the file is a .gz file, extract it
-	if filepath.Ext(tempFilePath) == ".gz" {
-		err := extractGzip(tempFilePath, tempDir)
-		if err != nil {
-			log.Println("Error extracting .gz file:", err)
-			return
-		}
-		// Update the tempFilePath to the extracted file
-		tempFilePath = tempFilePath[:len(tempFilePath)-len(filepath.Ext(tempFilePath))]
+// processExistingFiles processes all existing files in the directory
+func processExistingFiles(mainDir, tempDir string, db *sql.DB) {
+	files, err := os.ReadDir(mainDir)
+	if err != nil {
+		log.Errorf("Error reading directory '%s': %v", mainDir, err)
+		return
 	}
+
+	var wg sync.WaitGroup
+	for _, fileInfo := range files {
+		wg.Add(1)
+		go func(fileInfo os.DirEntry) {
+			defer wg.Done()
+			filePath := filepath.Join(mainDir, fileInfo.Name())
+			handleNewFile(filePath, mainDir, tempDir, db)
+		}(fileInfo)
+	}
+	wg.Wait()
+}
+
+// handleNewFile is updated to include proper error handling and resource management.
+func handleNewFile(filePath, mainDir, tempDir string, db *sql.DB) {
+	tempFilePath := filepath.Join(tempDir, filepath.Base(filePath))
+	err := os.Rename(filePath, tempFilePath)
+	if err != nil {
+		log.Errorf("Error moving file '%s': %v", filePath, err)
+		return
+	}
+	processFile(tempFilePath, db)
+}
+
+// watchDirectory sets up a watcher on the specified directory
+func watchDirectory(directory string, watcher *fsnotify.Watcher, db *sql.DB, isMainDir bool) {
+	err := watcher.Add(directory)
+
+	if err != nil {
+		log.Error(err)
+	}
+
+	for {
+		select {
+		case event, _ := <-watcher.Events:
+			// ... [error handling]
+			if isMainDir && event.Op&fsnotify.Create == fsnotify.Create && filepath.Ext(event.Name) == ".gz" {
+				go handleNewGzFile(event.Name, watcher)
+			} else if !isMainDir && event.Op&fsnotify.Create == fsnotify.Create && filepath.Ext(event.Name) == ".log" {
+				go func() {
+					_, err := processLogFile(event.Name)
+					if err != nil {
+
+					}
+				}()
+			}
+
+		case err, _ := <-watcher.Errors:
+			log.Error(err)
+		}
+	}
+}
+
+// handleNewGzFile handles new .gz files in the main directory
+func handleNewGzFile(filePath string, watcher *fsnotify.Watcher) {
+	// Extract the .gz file to the tempDir
+	err := extractGzip(filePath, tempDir)
+	if err != nil {
+		log.Errorf("Error extracting .gz file '%s': %v", filePath, err)
+		return
+	}
+}
+
+func processFile(file string, db *sql.DB) {
+	// Get the file name and construct the temp file path
+	fileName := filepath.Base(file)
+	tempFilePath := filepath.Join(tempDir, fileName)
 
 	// Process the file if it's a .log file
 	if filepath.Ext(tempFilePath) == ".log" {
-		cdrs, err := processLines(tempFilePath)
+		cdrs, err := processLogFile(tempFilePath)
 		if err != nil {
 			log.Println("Error processing log file:", err)
 			return
@@ -144,7 +177,7 @@ func processFile(filePath string, db *sql.DB) {
 		// Insert CDR records into the database
 		// Use a prepared SQL statement for database insertion
 		// Prepare the SQL statement for inserting CDR records
-		stmt, err := db.Prepare(`
+		stmt, err := sqlDB.Prepare(`
     INSERT INTO tb_cdr 
     (Timestamp, Type, SessionID, LegID, StartTime, ConnectedTime, EndTime, FreedTime, Duration, 
     TerminationCause, TerminationSource, Calling, Called, NAP, Direction, Media, RtpRx, RtpTx, 
@@ -171,31 +204,6 @@ func processFile(filePath string, db *sql.DB) {
 		if err != nil {
 			log.Println("Error inserting CDR record into database:", err)
 		}
-	}
-}
-
-func processExistingFiles(directory string, db *sql.DB) {
-	files, err := ioutil.ReadDir(directory)
-	if err != nil {
-		log.Error("Error reading directory:", directory, err)
-		return
-	}
-	for _, file := range files {
-		filePath := filepath.Join(directory, file.Name())
-
-		// Move file to tempDir if it's in mainDir
-		if directory == mainDir {
-			tempFilePath := filepath.Join(tempDir, file.Name())
-			err := os.Rename(filePath, tempFilePath)
-			if err != nil {
-				log.Println("Error moving file:", err)
-				continue // Skip to the next file
-			}
-			filePath = tempFilePath
-		}
-		time.Sleep(250 * time.Millisecond) // Sleep for 250ms to allow the file to be moved
-
-		go processFile(filePath, db)
 	}
 }
 
@@ -251,7 +259,7 @@ var (
 	regexEnd    = `(?P<Timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+-\d{4}),END,SessionId='(?P<SessionId>[^']+)',LegId='(?P<LegId>[^']+)',StartTime='(?P<StartTime>[^']+)',ConnectedTime='(?P<ConnectedTime>[^']+)',EndTime='(?P<EndTime>[^']+)',FreedTime='(?P<FreedTime>[^']+)',Duration='(?P<Duration>[^']+)',TerminationCause='(?P<TerminationCause>[^']+)',TerminationSource='(?P<TerminationSource>[^']+)',Calling='(?P<Calling>[^']+)',Called='(?P<Called>[^']+)',NAP='(?P<NAP>.*?)',Direction='(?P<Direction>.*?)',Media='(?P<Media>.*?)',Rtp:Rx='(?P<RtpRx>.*?)',Rtp:Tx='(?P<RtpTx>.*?)',T38:Rx='(?P<T38Rx>.*?)',T38:Tx='(?P<T38Tx>.*?)',Error:FromNetwork='(?P<ErrorFromNetwork>.*?)',Error:ToNetwork='(?P<ErrorToNetwork>.*?)',MOS=(?P<MOS>.*?),NetworkQuality=(?P<NetworkQuality>.*)`
 )
 
-func processLines(filePath string) ([]CDR, error) {
+func processLogFile(filePath string) ([]CDR, error) {
 	var cdrs []CDR
 
 	// Open the file
