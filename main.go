@@ -98,6 +98,16 @@ func main() {
 					return
 				}
 				if event.Op&fsnotify.Create == fsnotify.Create {
+					srcFilePath := event.Name
+					destFilePath := filepath.Join(tempDir, filepath.Base(event.Name))
+
+					// Move the file to the temp directory
+					err := os.Rename(srcFilePath, destFilePath)
+					if err != nil {
+						log.Println("Error moving file:", err)
+						continue // Continue to next event
+					}
+
 					log.Println("New file detected:", event.Name)
 					go processFile(event.Name, db) // Process in a new goroutine
 				}
