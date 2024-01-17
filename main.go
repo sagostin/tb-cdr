@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 )
 
 var (
@@ -330,12 +331,25 @@ func processLogFile(filePath string) ([]CDR, error) {
 		var cdr CDR
 		var match []string
 
+		// Define the layout of the input timestamp
+		layout := "2006-01-02 15:04:05.000-0700"
+
 		if strings.Contains(line, "BEG") {
 			r := regexp.MustCompile(regexStart)
 			match = r.FindStringSubmatch(line)
+
+			// Parse the timestamp string according to the layout
+			t, err := time.Parse(layout, match[r.SubexpIndex("Timestamp")])
+			if err != nil {
+				log.Error("Error parsing timestamp: %v\n", err)
+			}
+
+			// Format the time in a standard format for SQL
+			formattedTimestamp := t.Format("2006-01-02 15:04:05")
+
 			if match != nil {
 				cdr = CDR{
-					Timestamp:     match[r.SubexpIndex("Timestamp")],
+					Timestamp:     formattedTimestamp,
 					Type:          "BEG",
 					SessionID:     match[r.SubexpIndex("SessionId")],
 					LegID:         match[r.SubexpIndex("LegId")],
@@ -351,9 +365,19 @@ func processLogFile(filePath string) ([]CDR, error) {
 		} else if strings.Contains(line, "UPD") {
 			r := regexp.MustCompile(regexUpdate)
 			match = r.FindStringSubmatch(line)
+
+			// Parse the timestamp string according to the layout
+			t, err := time.Parse(layout, match[r.SubexpIndex("Timestamp")])
+			if err != nil {
+				log.Error("Error parsing timestamp: %v\n", err)
+			}
+
+			// Format the time in a standard format for SQL
+			formattedTimestamp := t.Format("2006-01-02 15:04:05")
+
 			if match != nil {
 				cdr = CDR{
-					Timestamp:        match[r.SubexpIndex("Timestamp")],
+					Timestamp:        formattedTimestamp,
 					Type:             "UPD",
 					SessionID:        match[r.SubexpIndex("SessionId")],
 					LegID:            match[r.SubexpIndex("LegId")],
@@ -368,9 +392,19 @@ func processLogFile(filePath string) ([]CDR, error) {
 		} else if strings.Contains(line, "END") {
 			r := regexp.MustCompile(regexEnd)
 			match = r.FindStringSubmatch(line)
+
+			// Parse the timestamp string according to the layout
+			t, err := time.Parse(layout, match[r.SubexpIndex("Timestamp")])
+			if err != nil {
+				log.Error("Error parsing timestamp: %v\n", err)
+			}
+
+			// Format the time in a standard format for SQL
+			formattedTimestamp := t.Format("2006-01-02 15:04:05")
+
 			if match != nil {
 				cdr = CDR{
-					Timestamp:         match[r.SubexpIndex("Timestamp")],
+					Timestamp:         formattedTimestamp,
 					Type:              "END",
 					SessionID:         match[r.SubexpIndex("SessionId")],
 					LegID:             match[r.SubexpIndex("LegId")],
