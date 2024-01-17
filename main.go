@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"compress/gzip"
 	"database/sql"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"github.com/fsnotify/fsnotify"
@@ -199,78 +200,40 @@ func dbPush(cdrs []CDR) error {
 	return nil
 }
 
-/*func processFile(file string) {
-	// Get the file name and construct the temp file path
-	fileName := filepath.Base(file)
-	tempFilePath := filepath.Join(tempDir, fileName)
-
-	// Process the file if it's a .log file
-	if filepath.Ext(tempFilePath) == ".log" {
-		cdrs, err := processLogFile(tempFilePath)
-		if err != nil {
-			log.Println("Error processing log file:", err)
-			return
-		}
-
-		// Remove the processed .log file
-		err = os.Remove(tempFilePath)
-		if err != nil {
-			log.Println("Error removing processed file:", err)
-			// Continue to database insertion even if file removal fails
-		}
-
-		// Insert CDR records into the database
-		// Use a prepared SQL statement for database insertion
-		// Prepare the SQL statement for inserting CDR records
-		stmt, err := sqlDB.Prepare(`
-    INSERT INTO tb_cdr
-    (Timestamp, Type, SessionID, LegID, StartTime, ConnectedTime, EndTime, FreedTime, Duration,
-    TerminationCause, TerminationSource, Calling, Called, NAP, Direction, Media, RtpRx, RtpTx,
-    T38Rx, T38Tx, ErrorFromNetwork, ErrorToNetwork, MOS, NetworkQuality)
-    VALUES
-    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-		if err != nil {
-			log.Error("Error preparing insert statement:", err)
-		}
-
-		// Iterate over the CDR records and insert them into the database
-		for _, cdr := range cdrs {
-			_, err = stmt.Exec(
-				cdr.Timestamp, cdr.Type, cdr.SessionID, cdr.LegID, cdr.StartTime, cdr.ConnectedTime, cdr.EndTime,
-				cdr.FreedTime, cdr.Duration, cdr.TerminationCause, cdr.TerminationSource, cdr.Calling, cdr.Called,
-				cdr.NAP, cdr.Direction, cdr.Media, cdr.RtpRx, cdr.RtpTx, cdr.T38Rx, cdr.T38Tx, cdr.ErrorFromNetwork,
-				cdr.ErrorToNetwork, cdr.MOS, cdr.NetworkQuality,
-			)
-			if err != nil {
-				log.Println("Error inserting CDR record:", err)
-			}
-		}
-
-		if err != nil {
-			log.Println("Error inserting CDR record into database:", err)
-		}
-	}
-}*/
-
 func extractGzip(src, destDir string) error {
 	gzFile, err := os.Open(src)
 	if err != nil {
 		return fmt.Errorf("error opening .gz file: %v", err)
 	}
-	defer gzFile.Close()
+	defer func(gzFile *os.File) {
+		err := gzFile.Close()
+		if err != nil {
+			log.Error(err)
+		}
+	}(gzFile)
 
 	gzReader, err := gzip.NewReader(gzFile)
 	if err != nil {
 		return fmt.Errorf("error creating gzip reader: %v", err)
 	}
-	defer gzReader.Close()
+	defer func(gzReader *gzip.Reader) {
+		err := gzReader.Close()
+		if err != nil {
+
+		}
+	}(gzReader)
 
 	extractedFilePath := filepath.Join(destDir, strings.TrimSuffix(filepath.Base(src), ".gz"))
 	extractedFile, err := os.Create(extractedFilePath)
 	if err != nil {
 		return fmt.Errorf("error creating extracted file: %v", err)
 	}
-	defer extractedFile.Close()
+	defer func(extractedFile *os.File) {
+		err := extractedFile.Close()
+		if err != nil {
+			log.Error(err)
+		}
+	}(extractedFile)
 
 	_, err = io.Copy(extractedFile, gzReader)
 	if err != nil {
@@ -338,16 +301,16 @@ func processLogFile(filePath string) ([]CDR, error) {
 			r := regexp.MustCompile(regexStart)
 			match = r.FindStringSubmatch(line)
 
-			// Parse the timestamp string according to the layout
-			t, err := time.Parse(layout, match[r.SubexpIndex("Timestamp")])
-			if err != nil {
-				log.Error("Error parsing timestamp: %v\n", err)
-			}
+			if len(match) > 0 {
+				// Parse the timestamp string according to the layout
+				t, err := time.Parse(layout, match[r.SubexpIndex("Timestamp")])
+				if err != nil {
+					log.Error("Error parsing timestamp: %v\n", err)
+				}
 
-			// Format the time in a standard format for SQL
-			formattedTimestamp := t.Format("2006-01-02 15:04:05")
+				// Format the time in a standard format for SQL
+				formattedTimestamp := t.Format("2006-01-02 15:04:05")
 
-			if match != nil {
 				cdr = CDR{
 					Timestamp:     formattedTimestamp,
 					Type:          "BEG",
@@ -366,16 +329,16 @@ func processLogFile(filePath string) ([]CDR, error) {
 			r := regexp.MustCompile(regexUpdate)
 			match = r.FindStringSubmatch(line)
 
-			// Parse the timestamp string according to the layout
-			t, err := time.Parse(layout, match[r.SubexpIndex("Timestamp")])
-			if err != nil {
-				log.Error("Error parsing timestamp: %v\n", err)
-			}
+			if len(match) > 0 {
+				// Parse the timestamp string according to the layout
+				t, err := time.Parse(layout, match[r.SubexpIndex("Timestamp")])
+				if err != nil {
+					log.Error("Error parsing timestamp: %v\n", err)
+				}
 
-			// Format the time in a standard format for SQL
-			formattedTimestamp := t.Format("2006-01-02 15:04:05")
+				// Format the time in a standard format for SQL
+				formattedTimestamp := t.Format("2006-01-02 15:04:05")
 
-			if match != nil {
 				cdr = CDR{
 					Timestamp:        formattedTimestamp,
 					Type:             "UPD",
@@ -393,16 +356,16 @@ func processLogFile(filePath string) ([]CDR, error) {
 			r := regexp.MustCompile(regexEnd)
 			match = r.FindStringSubmatch(line)
 
-			// Parse the timestamp string according to the layout
-			t, err := time.Parse(layout, match[r.SubexpIndex("Timestamp")])
-			if err != nil {
-				log.Error("Error parsing timestamp: %v\n", err)
-			}
+			if len(match) > 0 {
+				// Parse the timestamp string according to the layout
+				t, err := time.Parse(layout, match[r.SubexpIndex("Timestamp")])
+				if err != nil {
+					log.Error("Error parsing timestamp: %v\n", err)
+				}
 
-			// Format the time in a standard format for SQL
-			formattedTimestamp := t.Format("2006-01-02 15:04:05")
+				// Format the time in a standard format for SQL
+				formattedTimestamp := t.Format("2006-01-02 15:04:05")
 
-			if match != nil {
 				cdr = CDR{
 					Timestamp:         formattedTimestamp,
 					Type:              "END",
@@ -429,22 +392,35 @@ func processLogFile(filePath string) ([]CDR, error) {
 					MOS:               match[r.SubexpIndex("MOS")],            // Assuming MOS1 and MOS2 need to be combined
 					NetworkQuality:    match[r.SubexpIndex("NetworkQuality")], // Assuming NetworkQuality1 and NetworkQuality2 need to be combined
 				}
+
+				marshal, err := json.Marshal(cdr)
+				if err != nil {
+					return nil, err
+				}
+				log.Info(string(marshal))
 			}
 		} else {
 			log.Printf("Unknown CDR type. Skipping line: %s\n", line)
 			continue
 		}
 
-		if match != nil {
+		if len(match) > 0 {
 			cdrs = append(cdrs, cdr)
 		} else {
 			log.Printf("Line did not match. Skipping line: %s\n", line)
 		}
+
+		// Reset the CDR struct
+		cdr = CDR{}
 	}
 
 	// Check for any errors encountered while reading the file
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("error reading file: %v", err)
+	}
+
+	if len(cdrs) == 0 {
+		return nil, fmt.Errorf("no CDRs found in file")
 	}
 
 	return cdrs, nil
