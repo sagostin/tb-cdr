@@ -20,6 +20,7 @@ import (
 var (
 	mainDir     string
 	tempDir     string
+	archiveDir  string
 	sqlUser     string
 	sqlPassword string
 	sqlHost     string
@@ -32,6 +33,7 @@ func init() {
 	// Initialize command-line flags
 	flag.StringVar(&mainDir, "mainDir", "./new", "Main working directory")
 	flag.StringVar(&tempDir, "tempDir", "./tmp", "Temporary directory for processing files")
+	flag.StringVar(&archiveDir, "archiveDir", "./archive", "Archive directory for processed files")
 	flag.StringVar(&sqlUser, "sqlUser", "root", "SQL database username")
 	flag.StringVar(&sqlPassword, "sqlPassword", "", "SQL database password")
 	flag.StringVar(&sqlHost, "sqlHost", "localhost", "SQL database host")
@@ -50,6 +52,8 @@ func initDB() (*sql.DB, error) {
 }
 
 func main() {
+	log.Info("Starting CDR processor")
+
 	// Initialize the database connection
 	db, err := initDB()
 	if err != nil {
@@ -64,6 +68,8 @@ func main() {
 
 	sqlDB = db
 
+	log.Info("Database connection initialized")
+
 	// Initialize the file watcher
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -77,15 +83,19 @@ func main() {
 	}(watcher)
 
 	// Start the processing routines
-	go watchDirectory(mainDir, watcher, db, true)  // Watch for .gz files in mainDir
-	go watchDirectory(tempDir, watcher, db, false) // Watch for .log files in tempDir
+	go watchDirectory(mainDir, watcher, true) // Watch for .gz files in mainDir
+	//go watchDirectory(tempDir, watcher, false) // Watch for .log files in tempDir
+	log.Info("Started processing routines")
+
+	processExistingFiles(mainDir, tempDir)
+	log.Info("Existing files processed")
 
 	// Wait for termination signal
 	select {}
 }
 
 // processExistingFiles processes all existing files in the directory
-func processExistingFiles(mainDir, tempDir string, db *sql.DB) {
+func processExistingFiles(mainDir string, tempDir string) {
 	files, err := os.ReadDir(mainDir)
 	if err != nil {
 		log.Errorf("Error reading directory '%s': %v", mainDir, err)
@@ -94,29 +104,22 @@ func processExistingFiles(mainDir, tempDir string, db *sql.DB) {
 
 	var wg sync.WaitGroup
 	for _, fileInfo := range files {
+		log.Warn("Processing file:", fileInfo.Name())
+
 		wg.Add(1)
 		go func(fileInfo os.DirEntry) {
 			defer wg.Done()
-			filePath := filepath.Join(mainDir, fileInfo.Name())
-			handleNewFile(filePath, mainDir, tempDir, db)
+			err := extractGzip(filepath.Join(mainDir, fileInfo.Name()), tempDir)
+			if err != nil {
+				log.Error(err)
+			}
 		}(fileInfo)
 	}
 	wg.Wait()
 }
 
-// handleNewFile is updated to include proper error handling and resource management.
-func handleNewFile(filePath, mainDir, tempDir string, db *sql.DB) {
-	tempFilePath := filepath.Join(tempDir, filepath.Base(filePath))
-	err := os.Rename(filePath, tempFilePath)
-	if err != nil {
-		log.Errorf("Error moving file '%s': %v", filePath, err)
-		return
-	}
-	processFile(tempFilePath, db)
-}
-
 // watchDirectory sets up a watcher on the specified directory
-func watchDirectory(directory string, watcher *fsnotify.Watcher, db *sql.DB, isMainDir bool) {
+func watchDirectory(directory string, watcher *fsnotify.Watcher, isMainDir bool) {
 	err := watcher.Add(directory)
 
 	if err != nil {
@@ -127,13 +130,15 @@ func watchDirectory(directory string, watcher *fsnotify.Watcher, db *sql.DB, isM
 		select {
 		case event, _ := <-watcher.Events:
 			// ... [error handling]
-			if isMainDir && event.Op&fsnotify.Create == fsnotify.Create && filepath.Ext(event.Name) == ".gz" {
-				go handleNewGzFile(event.Name, watcher)
-			} else if !isMainDir && event.Op&fsnotify.Create == fsnotify.Create && filepath.Ext(event.Name) == ".log" {
+			if isMainDir && event.Op&fsnotify.Write == fsnotify.Write && filepath.Ext(event.Name) == ".gz" {
+				log.Warn("New .gz file:", event.Name)
+				go handleNewGzFile(event.Name)
+			} else if !isMainDir && event.Op&fsnotify.Write == fsnotify.Write && filepath.Ext(event.Name) == ".log" {
+				log.Warn("New .log file:", event.Name)
 				go func() {
 					_, err := processLogFile(event.Name)
 					if err != nil {
-
+						log.Error(err)
 					}
 				}()
 			}
@@ -145,7 +150,7 @@ func watchDirectory(directory string, watcher *fsnotify.Watcher, db *sql.DB, isM
 }
 
 // handleNewGzFile handles new .gz files in the main directory
-func handleNewGzFile(filePath string, watcher *fsnotify.Watcher) {
+func handleNewGzFile(filePath string) {
 	// Extract the .gz file to the tempDir
 	err := extractGzip(filePath, tempDir)
 	if err != nil {
@@ -154,7 +159,46 @@ func handleNewGzFile(filePath string, watcher *fsnotify.Watcher) {
 	}
 }
 
-func processFile(file string, db *sql.DB) {
+func dbPush(cdrs []CDR) error {
+	// Get the file name and construct the temp file path
+
+	// Insert CDR records into the database
+	// Use a prepared SQL statement for database insertion
+	// Prepare the SQL statement for inserting CDR records
+	stmt, err := sqlDB.Prepare(`
+    INSERT INTO tb_cdr 
+    (Timestamp, Type, SessionID, LegID, StartTime, ConnectedTime, EndTime, FreedTime, Duration, 
+    TerminationCause, TerminationSource, Calling, Called, NAP, Direction, Media, RtpRx, RtpTx, 
+    T38Rx, T38Tx, ErrorFromNetwork, ErrorToNetwork, MOS, NetworkQuality) 
+    VALUES 
+    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		log.Error("Error preparing insert statement:", err)
+		return err
+	}
+
+	// Iterate over the CDR records and insert them into the database
+	for _, cdr := range cdrs {
+		_, err = stmt.Exec(
+			cdr.Timestamp, cdr.Type, cdr.SessionID, cdr.LegID, cdr.StartTime, cdr.ConnectedTime, cdr.EndTime,
+			cdr.FreedTime, cdr.Duration, cdr.TerminationCause, cdr.TerminationSource, cdr.Calling, cdr.Called,
+			cdr.NAP, cdr.Direction, cdr.Media, cdr.RtpRx, cdr.RtpTx, cdr.T38Rx, cdr.T38Tx, cdr.ErrorFromNetwork,
+			cdr.ErrorToNetwork, cdr.MOS, cdr.NetworkQuality,
+		)
+		if err != nil {
+			log.Println("Error inserting CDR record:", err)
+			return err
+		}
+	}
+	if err != nil {
+		log.Println("Error inserting CDR record into database:", err)
+		return err
+	}
+
+	return nil
+}
+
+/*func processFile(file string) {
 	// Get the file name and construct the temp file path
 	fileName := filepath.Base(file)
 	tempFilePath := filepath.Join(tempDir, fileName)
@@ -178,11 +222,11 @@ func processFile(file string, db *sql.DB) {
 		// Use a prepared SQL statement for database insertion
 		// Prepare the SQL statement for inserting CDR records
 		stmt, err := sqlDB.Prepare(`
-    INSERT INTO tb_cdr 
-    (Timestamp, Type, SessionID, LegID, StartTime, ConnectedTime, EndTime, FreedTime, Duration, 
-    TerminationCause, TerminationSource, Calling, Called, NAP, Direction, Media, RtpRx, RtpTx, 
-    T38Rx, T38Tx, ErrorFromNetwork, ErrorToNetwork, MOS, NetworkQuality) 
-    VALUES 
+    INSERT INTO tb_cdr
+    (Timestamp, Type, SessionID, LegID, StartTime, ConnectedTime, EndTime, FreedTime, Duration,
+    TerminationCause, TerminationSource, Calling, Called, NAP, Direction, Media, RtpRx, RtpTx,
+    T38Rx, T38Tx, ErrorFromNetwork, ErrorToNetwork, MOS, NetworkQuality)
+    VALUES
     (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 		if err != nil {
 			log.Error("Error preparing insert statement:", err)
@@ -205,47 +249,50 @@ func processFile(file string, db *sql.DB) {
 			log.Println("Error inserting CDR record into database:", err)
 		}
 	}
-}
+}*/
 
 func extractGzip(src, destDir string) error {
 	gzFile, err := os.Open(src)
 	if err != nil {
 		return fmt.Errorf("error opening .gz file: %v", err)
 	}
-	defer func(gzFile *os.File) {
-		err := gzFile.Close()
-		if err != nil {
-
-		}
-	}(gzFile)
+	defer gzFile.Close()
 
 	gzReader, err := gzip.NewReader(gzFile)
 	if err != nil {
 		return fmt.Errorf("error creating gzip reader: %v", err)
 	}
-	defer func(gzReader *gzip.Reader) {
-		err := gzReader.Close()
-		if err != nil {
+	defer gzReader.Close()
 
-		}
-	}(gzReader)
-
-	// The name of the extracted file will be the same as the .gz file but without the .gz extension
 	extractedFilePath := filepath.Join(destDir, strings.TrimSuffix(filepath.Base(src), ".gz"))
 	extractedFile, err := os.Create(extractedFilePath)
 	if err != nil {
 		return fmt.Errorf("error creating extracted file: %v", err)
 	}
-	defer func(extractedFile *os.File) {
-		err := extractedFile.Close()
-		if err != nil {
-
-		}
-	}(extractedFile)
+	defer extractedFile.Close()
 
 	_, err = io.Copy(extractedFile, gzReader)
 	if err != nil {
 		return fmt.Errorf("error writing extracted data: %v", err)
+	}
+
+	cdrs, err := processLogFile(extractedFilePath)
+
+	// Process the extracted log file
+	if err != nil {
+		return fmt.Errorf("error processing log file: %v", err)
+	}
+
+	// Push CDR records to the database (assuming dbPush function exists)
+	err = dbPush(cdrs)
+	if err = dbPush(cdrs); err != nil {
+		return fmt.Errorf("error pushing data to database: %v", err)
+	}
+
+	// Move the .gz file to the archive directory after processing
+	archivePath := filepath.Join(archiveDir, filepath.Base(src))
+	if err = os.Rename(src, archivePath); err != nil {
+		return fmt.Errorf("error moving .gz file to archive: %v", err)
 	}
 
 	return nil
