@@ -92,5 +92,13 @@ NetworkQuality VARCHAR(255)
 );
 ```
 
+## Additional Resources
 
-</code></div></div></pre>
+To effectively use this CDR processing application, it is recommended to familiarize yourself with the specifics of Text Call Detail Records (CDRs) as used and provided by TelcoBridges. The following resources offer valuable information on Automatic Text CDR Retrieval and the details of Text CDRs:
+
+1. [TelcoBridges - Automatic Text CDR Retrieval](https://docs.telcobridges.com/TMG:Automatic_Text_CDR_Retrieval)
+   * This document provides guidelines on how to automatically retrieve Text CDRs. It includes information on setting up CDR retrieval and understanding the different methods available for this purpose.
+2. [TelcoBridges - Text Call Detail Records](https://docs.telcobridges.com/Text_Call_Detail_Records#Retrieving_Text_CDRs)
+   * This page offers a comprehensive overview of Text CDRs, including their format, fields, and methods for retrieval. Understanding this information is crucial for correctly processing and interpreting the data in the CDR files.
+
+Please ensure that you review and understand these documents to get the most out of the CDR processing application.
