@@ -316,6 +316,8 @@ func processLogFile(filePath string) ([]CDR, error) {
 					log.Error("Error parsing timestamp: %v\n", err)
 				}
 
+				t = t.UTC()
+
 				// Format the time in a standard format for SQL
 				formattedTimestamp := t.Format("2006-01-02 15:04:05")
 
@@ -344,6 +346,8 @@ func processLogFile(filePath string) ([]CDR, error) {
 					log.Error("Error parsing timestamp: %v\n", err)
 				}
 
+				t = t.UTC()
+
 				// Format the time in a standard format for SQL
 				formattedTimestamp := t.Format("2006-01-02 15:04:05")
 
@@ -370,6 +374,8 @@ func processLogFile(filePath string) ([]CDR, error) {
 				if err != nil {
 					log.Error("Error parsing timestamp: %v\n", err)
 				}
+
+				t = t.UTC()
 
 				// Format the time in a standard format for SQL
 				formattedTimestamp := t.Format("2006-01-02 15:04:05")
